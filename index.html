@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trade Finance · Voice</title>
+<style>
+  :root{--ink:#0B1220;--muted:#667085;--paper:#F4F5F0;--card:#fff;--teal:#226358;--teal-soft:#E1EFEC;--gold:#8C6822;--gold-soft:#FBF1D9;--danger:#B8402A;--border:#E1E3DC}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--paper);color:var(--ink);font:13px/1.4 Inter,-apple-system,"Segoe UI",sans-serif}
+  #bar{height:52px;display:flex;align-items:center;gap:12px;padding:0 14px;background:var(--card);border-bottom:1px solid var(--border)}
+  #orb{flex:none;width:38px;height:38px;border-radius:50%;border:0;cursor:pointer;display:grid;place-items:center;background:var(--paper);box-shadow:0 0 0 1px var(--border)}
+  #orb svg{width:19px;height:19px;color:var(--muted)}
+  #orb.listening{background:var(--teal);box-shadow:0 0 0 4px var(--teal-soft);animation:pulse 1.8s ease-in-out infinite}
+  #orb.listening svg{color:#fff}
+  #orb.sleeping{background:var(--gold-soft)} #orb.sleeping svg{color:var(--gold)}
+  #orb.speaking{background:var(--ink)} #orb.speaking svg{color:#fff}
+  @keyframes pulse{50%{box-shadow:0 0 0 8px var(--teal-soft)}}
+  .brand{flex:none;font-weight:700}
+  .txt{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center}
+  #state{font-weight:600;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #heard{color:var(--ink)} #said{color:var(--teal);margin-left:10px}
+  #conn{flex:none;font:600 10.5px/1 ui-monospace,Menlo,monospace;padding:5px 9px;border-radius:99px;background:var(--gold-soft);color:var(--gold)}
+  #conn.ok{background:var(--teal-soft);color:var(--teal)}
+  select{font:inherit;padding:4px 6px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:var(--ink)}
+  label.sp{flex:none;font-size:12px;color:var(--muted);white-space:nowrap}
+  #app{display:block;width:100%;height:calc(100% - 52px);border:0;background:var(--paper)}
+  #noapp{padding:40px 24px;max-width:640px;margin:0 auto;font-size:14px;line-height:1.6}
+  #noapp h2{margin:0 0 8px}
+  #noapp .row{display:flex;gap:8px;margin:14px 0}
+  #noapp input{flex:1;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font:inherit;background:var(--card);color:var(--ink)}
+  #noapp button{padding:10px 18px;border:0;border-radius:8px;background:var(--teal);color:#fff;font:700 13px inherit;cursor:pointer}
+  #noapp .err{color:var(--danger);font-size:12.5px}
+  #noapp .tip{color:var(--muted);font-size:12.5px}
+  @media(max-width:700px){.brand,label.sp{display:none}}
+</style>
+</head>
+<body>
+<header id="bar">
+  <button id="orb" type="button" title="Start / stop listening" aria-label="Start or stop listening">
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 11.5C5.5 15.1 8.4 18 12 18s6.5-2.9 6.5-6.5M12 18v3M9 21h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+  </button>
+  <span class="brand">Finance Voice</span>
+  <div class="txt"><div id="state">Click the mic to start</div><div id="line"><span id="heard"></span><span id="said"></span></div></div>
+  <span id="conn">Loading app…</span>
+  <select id="lang" title="Speech language">
+    <option value="en-IN">English (India)</option>
+    <option value="hi-IN">Hindi / Hinglish</option>
+  </select>
+  <label class="sp"><input type="checkbox" id="speakOn" checked> Speak</label>
+</header>
+<iframe id="app" title="Trade Finance" allow="clipboard-read; clipboard-write"></iframe>
+<div id="noapp" hidden>
+  <h2>Connect your app</h2>
+  <p>Paste your Trade Finance web app address below. You only do this once — this page remembers it.
+  You can copy the address from Apps Script: <b>Deploy → Manage deployments → Web app URL</b>. It ends with <b>/exec</b>.</p>
+  <div class="row"><input id="appInput" type="url" placeholder="https://script.google.com/a/macros/.../exec" spellcheck="false"><button id="appSave" type="button">Save</button></div>
+  <p id="appErr" class="err" hidden>That does not look like an Apps Script web app address. It should start with https://script.google.com/ and end with /exec.</p>
+  <p class="tip">Then bookmark this page (Ctrl + D) and start your day from it.</p>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var orb = $('orb'), conn = $('conn');
+  var rec = null, want = false, running = false, sleeping = false, speaking = false, blocked = false;
+  var appWin = null;
+
+  function load(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
+  function keep(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  var lang = load('tfv_lang', 'en-IN'), speakOn = load('tfv_speak', '1') === '1';
+  $('lang').value = lang; $('speakOn').checked = speakOn;
+  $('lang').onchange = function () { lang = this.value; keep('tfv_lang', lang); if (want) { try { rec && rec.abort(); } catch (e) {} } };
+  $('speakOn').onchange = function () { speakOn = this.checked; keep('tfv_speak', speakOn ? '1' : '0'); if (!speakOn) speechSynthesis.cancel(); };
+
+  /* ---------- load the app (only Google Apps Script addresses are accepted) ---------- */
+  var APP_RE = /^https:\/\/script\.google\.com\/(a\/macros\/[^\/?#]+\/s|macros\/s)\/[A-Za-z0-9_-]+\/(exec|dev)([?#].*)?$/;
+  var fromLink = new URLSearchParams(location.search).get('app') || '';
+  var appUrl = APP_RE.test(fromLink) ? fromLink : load('tfv_app', '');
+  if (APP_RE.test(fromLink)) { keep('tfv_app', fromLink); history.replaceState(null, '', location.pathname); }
+  function loadApp(u) {
+    keep('tfv_app', u);
+    $('noapp').hidden = true; $('app').hidden = false; $('app').src = u;
+    conn.textContent = 'Loading app…'; conn.className = '';
+  }
+  if (appUrl && APP_RE.test(appUrl)) { loadApp(appUrl); }
+  else { $('app').hidden = true; $('noapp').hidden = false; conn.textContent = 'No app'; }
+  $('appSave').onclick = function () {
+    var u = ($('appInput').value || '').trim();
+    if (!APP_RE.test(u)) { $('appErr').hidden = false; return; }
+    $('appErr').hidden = true; loadApp(u); start();
+  };
+  $('appInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('appSave').click(); });
+
+  /* ---------- talk to the app inside the frame ---------- */
+  function fromGoogle(origin) { try { return /\.googleusercontent\.com$/.test(new URL(origin).hostname); } catch (e) { return false; } }
+  function post(msg) { if (!appWin) return; msg.src = 'tf-voice-bridge'; try { appWin.postMessage(msg, '*'); } catch (e) {} }
+
+  window.addEventListener('message', function (e) {
+    var d = e.data || {};
+    if (d.src !== 'tf-voice-app' || !fromGoogle(e.origin)) return;
+    if (appWin !== e.source) { appWin = e.source; }
+    conn.className = 'ok'; conn.textContent = 'Connected';
+    if (d.type === 'TF_HELLO') { post({ type: 'TF_VOICE_READY', lang: lang }); post({ type: 'TF_VOICE_STATE', state: running ? (sleeping ? 'sleeping' : 'listening') : 'stopped' }); }
+    else if (d.type === 'TF_SPEAK') { $('said').textContent = d.text || ''; speak(d.text || ''); }
+    else if (d.type === 'TF_TOGGLE') { toggle(); }
+  });
+  $('app').addEventListener('load', function () { conn.className = ''; conn.textContent = 'Connecting…'; });
+
+  /* ---------- status line ---------- */
+  function show(m) { $('state').textContent = m; }
+  function paint() {
+    orb.className = speaking ? 'speaking' : sleeping ? 'sleeping' : running ? 'listening' : '';
+    if (blocked) return;
+    show(speaking ? 'Speaking…' : sleeping ? 'Sleeping — say “wake up”' : running ? 'Listening… say “sleep” to pause' : 'Mic off — click the mic to start');
+  }
+
+  /* ---------- speech recognition (continuous) ---------- */
+  function start() {
+    if (!SR) { blocked = true; show('This browser has no speech recognition. Use Chrome or Edge.'); return; }
+    want = true; blocked = false;
+    if (running || speaking) return;
+    rec = new SR();
+    rec.lang = lang; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
+    rec.onstart = function () { running = true; paint(); post({ type: 'TF_VOICE_STATE', state: sleeping ? 'sleeping' : 'listening' }); };
+    rec.onresult = function (ev) {
+      var fin = '', interim = '';
+      for (var i = ev.resultIndex; i < ev.results.length; i++) {
+        var t = ev.results[i][0].transcript;
+        if (ev.results[i].isFinal) fin += t; else interim += t;
+      }
+      if (interim && !sleeping) { $('heard').textContent = interim; post({ type: 'TF_VOICE_INTERIM', text: interim }); }
+      if (fin) onFinal(fin.trim());
+    };
+    rec.onerror = function (ev) {
+      var c = ev && ev.error;
+      if (c === 'not-allowed' || c === 'service-not-allowed') { want = false; blocked = true; show('Microphone blocked — click the mic, then choose “Allow”.'); }
+      else if (c === 'audio-capture') { want = false; blocked = true; show('No microphone found.'); }
+      else if (c === 'network') { show('Speech service unreachable — check the internet.'); }
+    };
+    rec.onend = function () {
+      running = false; paint();
+      if (want && !speaking) setTimeout(function () { if (want && !running && !speaking) start(); }, 300);
+    };
+    try { rec.start(); } catch (e) {}
+  }
+  function stop() { want = false; try { rec && rec.abort(); } catch (e) {} running = false; paint(); post({ type: 'TF_VOICE_STATE', state: 'stopped' }); }
+  function toggle() { if (running || want) stop(); else { sleeping = false; start(); } }
+  orb.onclick = toggle;
+
+  var WAKE = /\b(wake up|wakeup|utho|jaago|jago|hello finance|hey finance|start listening)\b/i;
+  var SLEEP = /^(please )?(sleep|go to sleep|pause|pause listening|stop listening|so jao|chup)\b/i;
+  function onFinal(text) {
+    if (!text) return;
+    if (sleeping) {
+      if (WAKE.test(text)) { sleeping = false; paint(); say('I am listening.'); post({ type: 'TF_VOICE_STATE', state: 'listening' }); }
+      return;
+    }
+    if (SLEEP.test(text)) { sleeping = true; paint(); say('Paused. Say wake up when you need me.'); post({ type: 'TF_VOICE_STATE', state: 'sleeping' }); return; }
+    $('heard').textContent = '“' + text + '”'; $('said').textContent = '';
+    if (!appWin) { say('The app is still loading.'); return; }
+    post({ type: 'TF_VOICE_FINAL', text: text, lang: lang });
+  }
+
+  /* ---------- speaking (listening pauses so it does not hear itself) ---------- */
+  function say(t) { $('said').textContent = t; speak(t); }
+  function speak(text) {
+    if (!speakOn || !text || !window.speechSynthesis) return;
+    speechSynthesis.cancel();
+    var u = new SpeechSynthesisUtterance(text);
+    u.lang = /[\u0900-\u097F]/.test(text) ? 'hi-IN' : 'en-IN';
+    var v = speechSynthesis.getVoices().filter(function (x) { return x.lang === u.lang; })[0];
+    if (v) u.voice = v;
+    u.rate = 1.05;
+    speaking = true; try { rec && rec.abort(); } catch (e) {} paint();
+    var done = function () { speaking = false; paint(); if (want && !running) start(); };
+    u.onend = done; u.onerror = done;
+    speechSynthesis.speak(u);
+  }
+
+  if (!$('app').hidden) start();     // starts at once if the microphone was allowed before
+  else paint();
+})();
+</script>
+</body>
+</html>
